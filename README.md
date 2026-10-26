@@ -10,11 +10,32 @@ Cloud Run ──(Direct VPC egress, all traffic)──> subnet ──> Cloud NAT
 
 ## Endpoints
 
-| Path | What it returns |
+| Method & path | What it does |
 |---|---|
 | `GET /api/db/ping` | MySQL version, server time and current database (connectivity check) |
-| `GET /api/items?limit=20` | Rows from the table in `APP_TABLE` (capped by `APP_MAX_ROWS`, default 100) |
+| `GET /api/loans?orgId=&userId=&status=&limit=50&offset=0` | List loans from `loan_info` (all filters optional, newest first, limit max 500) |
+| `GET /api/loans/{loanId}` | One loan, 404 if missing |
+| `POST /api/loans` | Insert. `loanId` optional (UUID generated); omitted `interestRate`, `received`, `status`, `applicationDate` use the column defaults. 409 if the id exists |
+| `PUT /api/loans/{loanId}` | Update all editable fields (`updatedDatetime` is set automatically) |
+| `DELETE /api/loans/{loanId}` | Delete, 204 on success |
 | `GET /actuator/health` | Health status |
+
+Example:
+
+```bash
+curl -X POST "$URL/api/loans" -H 'Content-Type: application/json' -d '{
+  "orgId": "ORG1", "userId": "U1", "loanAmount": 50000.00, "interestRate": 9.5,
+  "tenureMonths": 12, "purpose": "Car loan", "createdUser": "admin"
+}'
+
+curl -X PUT "$URL/api/loans/<loanId>" -H 'Content-Type: application/json' -d '{
+  "orgId": "ORG1", "userId": "U1", "loanAmount": 50000.00, "tenureMonths": 12,
+  "status": "APPROVED", "approvalDate": "2026-10-26", "updatedUser": "manager"
+}'
+```
+
+JSON field names map to columns: `loanId`=`pk_loan_id`, `orgId`=`loan_org_id`,
+`userId`=`loan_user_id`, and the rest are the camelCase form of the column name.
 
 ## Configuration (environment variables)
 
@@ -24,8 +45,6 @@ Cloud Run ──(Direct VPC egress, all traffic)──> subnet ──> Cloud NAT
 | `DB_PORT` | `3306` | |
 | `DB_NAME` | — | required |
 | `DB_USER` / `DB_PASSWORD` | — | from Secret Manager on Cloud Run; never commit them |
-| `APP_TABLE` | `items` | plain table name, optionally `schema.table` |
-| `APP_MAX_ROWS` | `100` | |
 | `DB_USE_SSL` | `false` | set `true` if the server requires TLS |
 
 ## Run locally
@@ -41,7 +60,7 @@ curl localhost:8080/api/db/ping
 
 ## Deploy to Cloud Run
 
-Edit `deploy/config.sh` (project id, region, DB name, table), then from a shell with
+Edit `deploy/config.sh` (project id, region, DB name), then from a shell with
 `gcloud` logged in (Cloud Shell works well):
 
 ```bash
@@ -55,6 +74,17 @@ After step 1, **whitelist the printed static IP on the MySQL server** (firewall 
 
 The deploy uses Cloud Run Direct VPC egress (`--network/--subnet --vpc-egress=all-traffic`),
 which replaces the older Serverless VPC Access connector and works with Cloud NAT.
+
+## Calling the deployed service
+
+The service is deployed **private** by default (`ALLOW_UNAUTHENTICATED="false"` in
+`deploy/config.sh`) because it can change and delete loans. Call it with an identity token:
+
+```bash
+curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$URL/api/loans"
+```
+
+Other callers need `roles/run.invoker` on the service.
 
 ## Troubleshooting
 

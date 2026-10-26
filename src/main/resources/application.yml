@@ -17,10 +17,6 @@ spring:
       initialization-fail-timeout: -1
       connection-timeout: 10000
 
-app:
-  table: ${APP_TABLE:items}
-  max-rows: ${APP_MAX_ROWS:100}
-
 management:
   endpoints:
     web:

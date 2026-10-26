@@ -15,7 +15,6 @@ STATIC_IP_NAME="cr-egress-ip"
 DB_HOST="63.142.240.31"
 DB_PORT="3306"
 DB_NAME="your_database"
-APP_TABLE="your_table"
 
 # Secret Manager secret names holding the DB username and password
 DB_USER_SECRET="mysql-db-user"
@@ -23,3 +22,7 @@ DB_PASSWORD_SECRET="mysql-db-password"
 
 AR_REPO="apps"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE}:latest"
+
+# The API can insert/update/delete loans, so it requires a Google identity token by default.
+# Set to "true" only if you really want it open to the internet.
+ALLOW_UNAUTHENTICATED="false"
