@@ -1,0 +1,32 @@
+# All connection details come from environment variables.
+# On Cloud Run, DB_USER / DB_PASSWORD are mounted from Secret Manager (see deploy/deploy.sh).
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: gcpnatgatewaymysqlspringboot
+  datasource:
+    url: jdbc:mysql://${DB_HOST:63.142.240.31}:${DB_PORT:3306}/${DB_NAME}?useSSL=${DB_USE_SSL:false}&allowPublicKeyRetrieval=true&serverTimezone=UTC&connectTimeout=10000
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: 0
+      # Don't fail container startup if the DB is briefly unreachable
+      initialization-fail-timeout: -1
+      connection-timeout: 10000
+
+app:
+  table: ${APP_TABLE:items}
+  max-rows: ${APP_MAX_ROWS:100}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
