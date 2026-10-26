@@ -60,6 +60,8 @@ curl localhost:8080/api/db/ping
 
 ## Deploy to Cloud Run
 
+Full walkthrough (Cloud Shell or Windows): [docs/DEPLOY-GUIDE.md](docs/DEPLOY-GUIDE.md).
+
 Edit `deploy/config.sh` (project id, region, DB name), then from a shell with
 `gcloud` logged in (Cloud Shell works well):
 
