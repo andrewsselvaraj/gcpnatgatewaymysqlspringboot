@@ -111,6 +111,23 @@ The service is private, so a browser shows 403. That's expected. To open it to t
 set `ALLOW_UNAUTHENTICATED="true"` in `config.sh` and re-run step 6. Only do that if you
 add your own authentication, since the API can change and delete loans.
 
+## Opening the API in a browser (public + API key)
+
+```bash
+git pull origin main
+./deploy/04-make-public.sh
+```
+
+This creates a random API key in Secret Manager, redeploys with the key check switched on,
+and makes the service public. It prints the key and ready-to-open links such as
+`https://<service-url>/api/loans?limit=10&key=<key>`. Every `/api/**` call needs the key,
+either as `?key=` or as an `X-API-Key` header; `/actuator/health` stays open.
+
+To change the key: `openssl rand -hex 24 | tr -d '\n' | gcloud secrets versions add mysql-app-api-key --data-file=-`
+and then run `./deploy/03-deploy.sh`.
+
+To make it private again: set `ALLOW_UNAUTHENTICATED="false"` in `deploy/config.sh` and run `./deploy/03-deploy.sh`.
+
 ## Updating later
 
 After a code change is pushed to GitHub:

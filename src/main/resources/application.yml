@@ -17,6 +17,10 @@ spring:
       initialization-fail-timeout: -1
       connection-timeout: 10000
 
+app:
+  # Optional. When set, every /api/** call needs this key (X-API-Key header or ?key=)
+  api-key: ${APP_API_KEY:}
+
 management:
   endpoints:
     web:
