@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud Run to external MySQL via Cloud NAT: setup guide</title>
+<style>
+:root{--bg:#fff;--fg:#1f1f1f;--muted:#5f6368;--line:#d0d4d9;--code:#f5f6f7;--zone:#f3f4f5;--acc:#1a73e8;--accbg:#e8f0fe}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1c1e;--fg:#e8eaed;--muted:#9aa0a6;--line:#3c4043;--code:#25272a;--zone:#232528;--acc:#8ab4f8;--accbg:#1f2a3c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}h1{font-size:1.9rem;line-height:1.25;margin:0 0 8px}
+h2{font-size:1.35rem;margin:40px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+code{font:0.88em ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;line-height:1.45}pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:.94rem;display:block;overflow-x:auto}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}th{background:var(--zone)}
+nav{margin:16px 0 8px;font-size:.95rem}nav a{color:var(--acc);margin-right:14px;text-decoration:none}nav a:hover{text-decoration:underline}
+.diagram{margin:20px 0}.diagram svg{width:100%;height:auto;font:13px system-ui,sans-serif}
+.diagram .t{font-size:15px;font-weight:600;fill:var(--fg)}.diagram .n{font-weight:600;fill:var(--fg)}.diagram .q{font-size:11.5px;fill:var(--muted)}.diagram .b{font-size:11.5px;fill:var(--fg)}
+.diagram .zone{fill:var(--zone);stroke:var(--line)}.diagram .box{fill:var(--bg);stroke:var(--muted);stroke-width:1.25}.diagram .acc{fill:var(--accbg);stroke:var(--acc);stroke-width:2}
+.diagram .ln path{fill:none;stroke:var(--muted);stroke-width:1.25}.diagram .ah{fill:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>Cloud Run to external MySQL via Cloud NAT: setup guide</h1>
+<nav><a href="#overview">Overview</a><a href="#1-cloud-nat-with-a-static-ip">1. Cloud NAT with a static IP</a><a href="#2-secret-manager-for-db-credentials">2. Secret Manager for DB credentials</a><a href="#3-deploy-to-cloud-run-through-the-nat">3. Deploy to Cloud Run through the NAT</a><a href="#4-mysql-server-listen-firewall-grant">4. MySQL server: listen, firewall, grant</a><a href="#5-verify-and-troubleshoot">5. Verify and troubleshoot</a></nav>
+<h2 id="overview">Overview</h2>
+<p>An external database usually allows connections only from known IPs. Cloud Run's default outbound IPs are shared and change, so you route its traffic through a VPC subnet and Cloud NAT with a reserved IP. The database then allows that one address, and Secret Manager supplies the credentials.</p>
+<figure class="diagram"><svg viewBox="0 0 760 308" role="img" aria-label="Every database connection leaves Google Cloud from one static IP">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker></defs>
+<text x="24" y="34" class="t">Every database connection leaves Google Cloud from one static IP</text>
+<rect x="24" y="60" width="500" height="200" rx="8" class="zone"/><text x="40" y="82" class="n">Google Cloud project</text>
+<rect x="564" y="60" width="172" height="120" rx="8" class="zone"/><text x="580" y="82" class="n">Database server</text>
+<g class="ln"><path d="M180 128H204" marker-end="url(#arrow)"/><path d="M344 128H368" marker-end="url(#arrow)"/><path d="M508 128H580" marker-end="url(#arrow)"/><path d="M110 188V164" marker-end="url(#arrow)"/></g>
+<text x="544" y="120" text-anchor="middle" class="q">TCP 3306</text><text x="118" y="180" class="q">DB_USER, DB_PASSWORD</text>
+<rect x="40" y="92" width="140" height="72" rx="8" class="box"/><text x="52" y="116" class="n">Cloud Run</text><text x="52" y="132" class="q">Direct VPC egress</text><text x="52" y="148" class="q">all-traffic</text>
+<rect x="204" y="92" width="140" height="72" rx="8" class="box"/><text x="216" y="116" class="n">VPC subnet</text><text x="216" y="132" class="q">same region</text><text x="216" y="148" class="q">e.g. 10.10.0.0/26</text>
+<rect x="368" y="92" width="140" height="72" rx="8" class="box acc"/><text x="380" y="116" class="n">Cloud NAT</text><text x="380" y="132" class="b">reserved static IP</text><text x="380" y="148" class="q">(NAT_IP)</text>
+<rect x="580" y="92" width="140" height="72" rx="8" class="box"/><text x="592" y="116" class="n">MySQL</text><text x="592" y="132" class="q">public IP :3306</text><text x="592" y="148" class="q">allows NAT_IP only</text>
+<rect x="40" y="188" width="180" height="56" rx="8" class="box"/><text x="52" y="212" class="n">Secret Manager</text><text x="52" y="228" class="q">injected at startup</text>
+<text x="24" y="288" class="q">The database sees only NAT_IP; its firewall and the user@NAT_IP grant shut out every other address.</text>
+</svg></figure>
+<p>The setup has four parts, in this order: the NAT, the secrets, the deployment, then the database server. Commands use <code>$PROJECT</code>, <code>$REGION</code>, <code>$NET</code>, <code>$SUBNET</code> and <code>NAT_IP</code> as placeholders, and 203.0.113.10 as an example database IP.</p>
+<h2 id="1-cloud-nat-with-a-static-ip">1. Cloud NAT with a static IP</h2>
+<p>Cloud NAT gives every outbound connection from a subnet one source IP that you reserve. The NAT only serves the regions and subnets you attach it to, so it must be in the same region as the Cloud Run service.</p>
+<pre><code class="language-bash"># Variables used below
+REGION=asia-south1; NET=egress-vpc; SUBNET=egress-subnet
+
+# 1) VPC + subnet (a /26 is enough for Cloud Run Direct VPC egress)
+gcloud compute networks create $NET --subnet-mode=custom
+gcloud compute networks subnets create $SUBNET \
+  --network=$NET --region=$REGION --range=10.10.0.0/26
+
+# 2) Reserve the static external IP
+gcloud compute addresses create egress-ip --region=$REGION
+gcloud compute addresses describe egress-ip --region=$REGION --format='value(address)'
+
+# 3) Cloud Router + Cloud NAT using only that IP
+gcloud compute routers create egress-router --network=$NET --region=$REGION
+gcloud compute routers nats create egress-nat \
+  --router=egress-router --region=$REGION \
+  --nat-custom-subnet-ip-ranges=$SUBNET \
+  --nat-external-ip-pool=egress-ip
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--subnet-mode=custom</code></td>
+<td>No automatic subnets; you choose region and range</td>
+</tr>
+<tr>
+<td><code>--nat-external-ip-pool</code></td>
+<td>Use the reserved IP(s), not auto-allocated ones that can change</td>
+</tr>
+<tr>
+<td><code>--nat-custom-subnet-ip-ranges</code></td>
+<td>NAT only this subnet (use <code>--nat-all-subnet-ip-ranges</code> for all)</td>
+</tr>
+<tr>
+<td><code>--min-ports-per-vm</code></td>
+<td>Raise (e.g. 128+) if you see port exhaustion under heavy load</td>
+</tr>
+</tbody>
+</table>
+<p>Check it with <code>gcloud compute routers nats describe egress-nat --router=egress-router --region=$REGION</code>. The NAT and the reserved IP are billed hourly, even when Cloud Run is idle.</p>
+<h2 id="2-secret-manager-for-db-credentials">2. Secret Manager for DB credentials</h2>
+<p>Store the DB username and password as secrets, give only the service's runtime account read access, and let Cloud Run inject them. Nothing sensitive goes in code, images or env files.</p>
+<pre><code class="language-bash"># Create (reads the value from stdin, so it never lands in shell history)
+read -rsp 'DB password: ' P; echo
+printf '%s' &quot;$P&quot; | gcloud secrets create db-password --replication-policy=automatic --data-file=-
+printf '%s' 'appuser' | gcloud secrets create db-user --replication-policy=automatic --data-file=-
+
+# Allow the Cloud Run runtime service account to read them
+SA=&quot;$(gcloud projects describe $PROJECT --format='value(projectNumber)')-compute@developer.gserviceaccount.com&quot;
+gcloud secrets add-iam-policy-binding db-password \
+  --member=&quot;serviceAccount:$SA&quot; --role=roles/secretmanager.secretAccessor
+
+# Rotate: add a new version (old versions stay until disabled/destroyed)
+printf '%s' &quot;$NEW&quot; | gcloud secrets versions add db-password --data-file=-
+gcloud secrets versions list db-password
+gcloud secrets versions disable 1 --secret=db-password
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>Syntax / note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mount as env var</td>
+<td><code>--set-secrets=DB_PASSWORD=db-password:latest</code></td>
+</tr>
+<tr>
+<td>Mount as file</td>
+<td><code>--set-secrets=/secrets/db-password=db-password:latest</code></td>
+</tr>
+<tr>
+<td>Pin a version</td>
+<td><code>db-password:3</code> instead of <code>:latest</code></td>
+</tr>
+<tr>
+<td>Pick up a new version</td>
+<td>Env vars are read at startup, so deploy a new revision; file mounts with <code>:latest</code> refresh on read</td>
+</tr>
+<tr>
+<td>Least privilege</td>
+<td>Use a dedicated service account (<code>--service-account</code>) and grant <code>secretAccessor</code> per secret, not per project</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-deploy-to-cloud-run-through-the-nat">3. Deploy to Cloud Run through the NAT</h2>
+<p>Attach the service to the subnet and send <strong>all</strong> egress through it. With the default <code>private-ranges-only</code>, calls to a public DB IP bypass the VPC and the NAT.</p>
+<pre><code class="language-bash"># Build the image with Cloud Build into Artifact Registry
+gcloud artifacts repositories create apps --repository-format=docker --location=$REGION
+IMAGE=$REGION-docker.pkg.dev/$PROJECT/apps/my-service:latest
+gcloud builds submit --tag $IMAGE .
+
+# Deploy with Direct VPC egress
+gcloud run deploy my-service --image=$IMAGE --region=$REGION \
+  --network=$NET --subnet=$SUBNET --vpc-egress=all-traffic \
+  --set-env-vars=DB_HOST=203.0.113.10,DB_PORT=3306,DB_NAME=appdb \
+  --set-secrets=DB_USER=db-user:latest,DB_PASSWORD=db-password:latest \
+  --no-allow-unauthenticated
+
+# Change one setting without rebuilding
+gcloud run services update my-service --region=$REGION --update-env-vars=DB_NAME=otherdb
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Use it when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Direct VPC egress (<code>--network</code>, <code>--subnet</code>)</td>
+<td>Default choice: no extra VMs, scales with the service</td>
+</tr>
+<tr>
+<td>Serverless VPC Access connector (<code>--vpc-connector</code>)</td>
+<td>Older setups, or features Direct VPC egress lacks; create with <code>gcloud compute networks vpc-access connectors create</code></td>
+</tr>
+<tr>
+<td><code>--vpc-egress=all-traffic</code></td>
+<td>Always, for a NAT static IP to apply to public destinations</td>
+</tr>
+<tr>
+<td><code>--no-allow-unauthenticated</code></td>
+<td>Private API; callers need an identity token or <code>roles/run.invoker</code></td>
+</tr>
+</tbody>
+</table>
+<p>Spring Boot reads the injected variables in <code>application.yml</code>:</p>
+<pre><code class="language-yaml">spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME}?sslMode=REQUIRED&amp;connectTimeout=10000
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 5          # Cloud Run instances x pool size must fit MySQL max_connections
+      initialization-fail-timeout: -1  # start even if the DB is briefly down
+</code></pre>
+<h2 id="4-mysql-server-listen-firewall-grant">4. MySQL server: listen, firewall, grant</h2>
+<p>The server must listen on its public address, let only the NAT IP reach port 3306, and have a user allowed only from that IP. <code>NAT_IP</code> below is the address from step 1.</p>
+<pre><code class="language-bash"># Listen on localhost + public IP (MySQL 8.0.13+ accepts a list).
+# Use 0.0.0.0 if the public IP is not on the server's own interface (ip addr).
+sed -i 's/^\s*bind-address\s*=.*/bind-address = 127.0.0.1,203.0.113.10/' /etc/mysql/mysql.conf.d/mysqld.cnf
+systemctl restart mysql
+ss -ltnp | grep 3306            # expect 203.0.113.10:3306 (or 0.0.0.0:3306)
+
+# Firewall: only the NAT IP may reach 3306 (allow SSH before enabling!)
+ufw allow OpenSSH
+ufw allow from NAT_IP to any port 3306 proto tcp
+ufw enable &amp;&amp; ufw status
+</code></pre>
+<pre><code class="language-sql">-- App user that can only log in from the NAT IP, with only the rights it needs
+CREATE USER 'appuser'@'NAT_IP' IDENTIFIED BY '&lt;strong password&gt;';
+GRANT SELECT, INSERT, UPDATE, DELETE ON appdb.* TO 'appuser'@'NAT_IP';
+FLUSH PRIVILEGES;
+
+-- Optional: require TLS for this user
+ALTER USER 'appuser'@'NAT_IP' REQUIRE SSL;
+
+-- Checks
+SHOW VARIABLES WHERE Variable_name IN ('bind_address','port','require_secure_transport');
+SHOW GRANTS FOR 'appuser'@'NAT_IP';
+</code></pre>
+<ul>
+<li>The firewall rule and the <code>user@NAT_IP</code> host each limit access to the NAT address. Together, a leaked password can't be used from anywhere else.</li>
+<li>Hosted MySQL (cPanel or a cloud provider): add the NAT IP under Remote MySQL, or in the provider's allowlist or security group, instead of <code>ufw</code>.</li>
+<li>Lost admin access on Ubuntu: <code>sudo mysql --defaults-file=/etc/mysql/debian.cnf</code> logs in as the maintenance user.</li>
+</ul>
+<h2 id="5-verify-and-troubleshoot">5. Verify and troubleshoot</h2>
+<p>Call a DB health endpoint with an identity token, then read the real error in the logs if it fails.</p>
+<pre><code class="language-bash">URL=$(gcloud run services describe my-service --region=$REGION --format='value(status.url)')
+curl -H &quot;Authorization: Bearer $(gcloud auth print-identity-token)&quot; &quot;$URL/api/db/ping&quot;
+
+gcloud logging read 'resource.type=&quot;cloud_run_revision&quot; AND resource.labels.service_name=&quot;my-service&quot; AND textPayload:&quot;Exception&quot;' \
+  --limit=3 --freshness=15m --format='value(textPayload)'
+
+# On the DB server: does traffic from the NAT IP arrive?
+timeout 30 tcpdump -ni any host NAT_IP and port 3306
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Error in the logs</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Connection refused</code></td>
+<td>MySQL listens only on 127.0.0.1</td>
+<td>Set <code>bind-address</code>, restart MySQL</td>
+</tr>
+<tr>
+<td><code>Communications link failure</code> or timeout, nothing in tcpdump</td>
+<td>Firewall drops the NAT IP, or egress isn't <code>all-traffic</code></td>
+<td>Allow NAT IP on 3306 (server and provider firewall); redeploy with <code>--vpc-egress=all-traffic</code></td>
+</tr>
+<tr>
+<td><code>Access denied for user 'u'@'NAT_IP' (using password: YES)</code></td>
+<td>No <code>user@NAT_IP</code>, or wrong secret value</td>
+<td>Create or grant the user; add a new secret version and redeploy</td>
+</tr>
+<tr>
+<td><code>Access denied ... to database 'x'</code></td>
+<td><code>DB_NAME</code> has no grant for that user</td>
+<td>Fix <code>DB_NAME</code>, or <code>GRANT</code> on that database</td>
+</tr>
+<tr>
+<td><code>Permission denied on secret</code> at deploy</td>
+<td>Runtime service account lacks <code>secretAccessor</code></td>
+<td><code>gcloud secrets add-iam-policy-binding ...</code></td>
+</tr>
+<tr>
+<td><code>403 Forbidden</code> in a browser</td>
+<td>Service is private</td>
+<td>Identity token, <code>gcloud run services proxy</code>, or public + app-level auth</td>
+</tr>
+<tr>
+<td>Source IP isn't the NAT IP</td>
+<td>NAT not covering the subnet, or wrong region</td>
+<td><code>gcloud compute routers nats describe ...</code>; NAT and service must share the region</td>
+</tr>
+</tbody>
+</table>
+</main>
+</body>
+</html>
