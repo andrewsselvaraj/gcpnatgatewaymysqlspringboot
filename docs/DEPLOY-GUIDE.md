@@ -97,14 +97,15 @@ Registry and deploys it to Cloud Run. At the end it prints the service URL, like
 ## Step 7: test it
 
 ```bash
-URL=$(gcloud run services describe mysql-springboot --region us-central1 --format='value(status.url)')
+source deploy/config.sh
+URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
 TOKEN=$(gcloud auth print-identity-token)
 
 curl -H "Authorization: Bearer $TOKEN" "$URL/api/db/ping"
 curl -H "Authorization: Bearer $TOKEN" "$URL/api/loans?limit=5"
 ```
 
-(Use your region if you changed it.) `db/ping` should return the MySQL version and server time.
+`db/ping` should return the MySQL version and server time.
 
 The service is private, so a browser shows 403. That's expected. To open it to the internet,
 set `ALLOW_UNAUTHENTICATED="true"` in `config.sh` and re-run step 6. Only do that if you
@@ -123,10 +124,11 @@ Steps 3 to 5 are one-time. Re-run step 5 only to change the DB password.
 
 ## If something fails
 
-Logs: `gcloud run services logs read mysql-springboot --region us-central1 --limit 50`
+Logs: `source deploy/config.sh && gcloud run services logs read "$SERVICE" --region "$REGION" --limit 50`
 
 | Symptom | Likely cause |
 |---|---|
+| 500 with `Connection refused` in the logs | MySQL listens only on localhost: set `bind-address = 127.0.0.1,<server public IP>` (or `0.0.0.0`) in `/etc/mysql/mysql.conf.d/mysqld.cnf` and restart MySQL |
 | `db/ping` hangs, then 500 with `Communications link failure` | Firewall on the MySQL side isn't allowing the static IP on 3306, or MySQL isn't listening publicly |
 | `Access denied for user 'x'@'34.x.x.x'` | MySQL user not granted for the static IP, or wrong password in step 5 |
 | `Unknown database` | `DB_NAME` in `config.sh` is wrong; fix and re-run step 6 |
